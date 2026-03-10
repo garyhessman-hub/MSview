@@ -462,7 +462,14 @@ class MSView(QMainWindow):
         self.resize(1320, 740)
 
         # App icon
-        _icon_path = os.path.join(os.path.dirname(__file__), "icon.png")
+        import sys as _sys
+        _base = os.path.dirname(__file__)
+        if _sys.platform == "darwin":
+            _icon_path = os.path.join(_base, "msview.icns")
+        elif _sys.platform == "win32":
+            _icon_path = os.path.join(_base, "msview.ico")
+        else:
+            _icon_path = os.path.join(_base, "icon.png")
         if os.path.exists(_icon_path):
             from PyQt6.QtGui import QIcon
             self.setWindowIcon(QIcon(_icon_path))
