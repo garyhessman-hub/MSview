@@ -20,7 +20,7 @@ jobs:
             --name "MSview" \
             --icon "msview.icns" \
             --add-data "isotopes.py:." \
-            --add-data "icon.png:." \
+            --add-data "icon.icns:." \
             msview.py
       - run: |
           brew install create-dmg
