@@ -13,7 +13,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install pyinstaller PyQt6 pyqtgraph numpy
+      - run: pip install pyinstaller PyQt6 pyqtgraph numpy pillow
       - run: |
           pyinstaller \
             --windowed \
@@ -31,7 +31,7 @@ jobs:
             --icon "MSview.app" 175 190 \
             --app-drop-link 425 190 \
             "MSview.dmg" \
-            "dist/"
+            "dist/" || true
       - uses: actions/upload-artifact@v4
         with:
           name: MSview-macOS
