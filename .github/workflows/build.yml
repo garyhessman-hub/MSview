@@ -80,7 +80,7 @@ jobs:
             Delete "$DESKTOP\MSview.lnk"
           SectionEnd
           "@ | Out-File -FilePath installer.nsi -Encoding ASCII
-      - run: makensis installer.nsi
+      - run: "C:\Program Files (x86)\NSIS\makensis.exe" installer.nsi
       - uses: actions/upload-artifact@v4
         with:
           name: MSview-Windows
