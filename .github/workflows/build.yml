@@ -18,7 +18,7 @@ jobs:
           pyinstaller \
             --windowed \
             --name "MSview" \
-            --icon "icon.png" \
+            --icon "msview.icns" \
             --add-data "isotopes.py:." \
             --add-data "icon.png:." \
             msview.py
