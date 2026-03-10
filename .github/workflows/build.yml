@@ -1,0 +1,87 @@
+name: Build MSview Installers
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pyinstaller PyQt6 pyqtgraph numpy
+      - run: |
+          pyinstaller \
+            --windowed \
+            --name "MSview" \
+            --icon "icon.png" \
+            --add-data "isotopes.py:." \
+            --add-data "icon.png:." \
+            msview.py
+      - run: |
+          brew install create-dmg
+          create-dmg \
+            --volname "MSview" \
+            --window-size 600 400 \
+            --icon-size 100 \
+            --icon "MSview.app" 175 190 \
+            --app-drop-link 425 190 \
+            "MSview.dmg" \
+            "dist/"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MSview-macOS
+          path: MSview.dmg
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pyinstaller PyQt6 pyqtgraph numpy
+      - run: |
+          pyinstaller `
+            --windowed `
+            --name "MSview" `
+            --icon "msview.ico" `
+            --add-data "isotopes.py;." `
+            --add-data "icon.png;." `
+            msview.py
+      - run: choco install nsis -y
+      - run: |
+          @"
+          !include "MUI2.nsh"
+          Name "MSview"
+          OutFile "MSview_Setup.exe"
+          InstallDir "$PROGRAMFILES\MSview"
+          RequestExecutionLevel admin
+          !insertmacro MUI_PAGE_WELCOME
+          !insertmacro MUI_PAGE_DIRECTORY
+          !insertmacro MUI_PAGE_INSTFILES
+          !insertmacro MUI_PAGE_FINISH
+          !insertmacro MUI_UNPAGE_CONFIRM
+          !insertmacro MUI_UNPAGE_INSTFILES
+          !insertmacro MUI_LANGUAGE "English"
+          Section "Install"
+            SetOutPath "$INSTDIR"
+            File /r "dist\MSview\*.*"
+            CreateShortcut "$DESKTOP\MSview.lnk" "$INSTDIR\MSview.exe"
+            WriteUninstaller "$INSTDIR\Uninstall.exe"
+          SectionEnd
+          Section "Uninstall"
+            Delete "$INSTDIR\Uninstall.exe"
+            RMDir /r "$INSTDIR"
+            Delete "$DESKTOP\MSview.lnk"
+          SectionEnd
+          "@ | Out-File -FilePath installer.nsi -Encoding ASCII
+      - run: makensis installer.nsi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MSview-Windows
+          path: MSview_Setup.exe
