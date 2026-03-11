@@ -6,15 +6,21 @@ on:
   workflow_dispatch:
 
 jobs:
+
   build-mac:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install pyinstaller PyQt6 pyqtgraph numpy pillow
-      - run: |
+
+      - name: Install dependencies
+        run: pip install pyinstaller PyQt6 pyqtgraph numpy pillow
+
+      - name: Build .app
+        run: |
           pyinstaller \
             --windowed \
             --name "MSview" \
@@ -22,7 +28,9 @@ jobs:
             --add-data "isotopes.py:." \
             --add-data "msview.icns:." \
             msview.py
-      - run: |
+
+      - name: Create .dmg
+        run: |
           brew install create-dmg
           create-dmg \
             --volname "MSview" \
@@ -32,6 +40,7 @@ jobs:
             --app-drop-link 425 190 \
             "MSview.dmg" \
             "dist/" || true
+
       - uses: actions/upload-artifact@v4
         with:
           name: MSview-macOS
@@ -41,21 +50,32 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install pyinstaller PyQt6 pyqtgraph numpy
-      - run: |
+
+      - name: Install dependencies
+        run: pip install pyinstaller PyQt6 pyqtgraph numpy pillow
+
+      - name: Build .exe
+        shell: pwsh
+        run: |
           pyinstaller `
             --windowed `
             --name "MSview" `
             --icon "msview.ico" `
             --add-data "isotopes.py;." `
-            --add-data "icon.png;." `
+            --add-data "msview.ico;." `
             msview.py
-      - run: choco install nsis -y
-      - run: |
-          @"
+
+      - name: Install NSIS
+        run: choco install nsis --yes
+
+      - name: Write NSIS script
+        shell: pwsh
+        run: |
+          Set-Content -Path installer.nsi -Encoding ASCII -Value @'
           !include "MUI2.nsh"
           Name "MSview"
           OutFile "MSview_Setup.exe"
@@ -79,12 +99,15 @@ jobs:
             RMDir /r "$INSTDIR"
             Delete "$DESKTOP\MSview.lnk"
           SectionEnd
-          "@ | Out-File -FilePath installer.nsi -Encoding ASCII
+          '@
+
       - name: Build installer
-        run: '& "C:\Program Files (x86)\NSIS\makensis.exe" installer.nsi'
         shell: pwsh
+        run: |
+          $makensis = "C:\Program Files (x86)\NSIS\makensis.exe"
+          & $makensis installer.nsi
+
       - uses: actions/upload-artifact@v4
         with:
           name: MSview-Windows
           path: MSview_Setup.exe
-
