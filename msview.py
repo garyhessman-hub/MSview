@@ -26,7 +26,6 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont, QColor, QAction, QGuiApplication, QImage
 
 import pyqtgraph as pg
-import pyqtgraph.exporters
 
 from isotopes import parse_formula, format_formula, isotope_distribution, gaussian_profile
 
@@ -377,11 +376,8 @@ class SpectrumViewBox(pg.ViewBox):
             self._clamp_y_to_visible()
         elif self._zoom_y:
             cy = pos.y(); yr = self.viewRange()[1]
-            # Allow zooming freely in Y — no floor at zero so small peaks stay visible
-            span = (yr[1] - yr[0]) * factor
-            lo = cy - (cy - yr[0]) * factor
-            hi = lo + max(span, 1e-9)
-            self._y_user_set = True
+            lo = max(cy + (yr[0] - cy) * factor, 0.0)
+            hi = max(cy + (yr[1] - cy) * factor, lo + 1e-9)
             self.setYRange(lo, hi, padding=0)
         ev.accept()
 
@@ -428,29 +424,25 @@ class SpectrumViewBox(pg.ViewBox):
 
     def mouseDragEvent(self, ev, axis=None):
         super().mouseDragEvent(ev, axis)
-        # Mark Y as user-controlled once they pan
-        self._y_user_set = True
-        # Only clamp X to zero after panning; allow free Y panning
-        if ev.isFinish(): self._clamp_x_to_zero()
+        if ev.isFinish(): self._clamp_to_data()
 
     def setRange(self, *args, **kwargs):
         super().setRange(*args, **kwargs)
+        self._clamp_to_data()
 
-    def _clamp_x_to_zero(self):
-        """Prevent panning left of m/z = 0, but leave Y free."""
+    def _clamp_to_data(self):
         xr = self.viewRange()[0]
+        yr = self.viewRange()[1]
         if xr[0] < 0:
             self.setXRange(0, xr[1] - xr[0], padding=0, update=False)
+        if yr[0] < 0:
+            self.setYRange(0, yr[1], padding=0, update=False)
 
     def _clamp_y_to_visible(self):
-        """Auto-fit Y to the tallest visible peak, but only if Y hasn't been
-        manually adjusted by the user (i.e. _y_user_set is False)."""
-        if getattr(self, "_y_user_set", False):
-            return
         xr = self.viewRange()[0]
         best = 0.0
         for item in self.addedItems:
-            if hasattr(item, "xData") and item.xData is not None:
+            if hasattr(item, 'xData') and item.xData is not None:
                 try:
                     mask = (item.xData >= xr[0]) & (item.xData <= xr[1])
                     vis  = item.yData[mask]
@@ -459,10 +451,6 @@ class SpectrumViewBox(pg.ViewBox):
                 except Exception: pass
         if best > 0:
             self.setYRange(0, best * 1.08, padding=0)
-
-    def reset_y_auto(self):
-        """Called on Reset View to re-enable auto Y fitting."""
-        self._y_user_set = False
 
 
 # ── Main Window ───────────────────────────────────────────────────────────────
@@ -473,15 +461,15 @@ class MSView(QMainWindow):
         self.setMinimumSize(1050, 640)
         self.resize(1320, 740)
 
-        # App icon
+        # App icon — use platform-appropriate format
         import sys as _sys
         _base = os.path.dirname(__file__)
-        if _sys.platform == "darwin":
-            _icon_path = os.path.join(_base, "msview.icns")
-        elif _sys.platform == "win32":
-            _icon_path = os.path.join(_base, "msview.ico")
+        if _sys.platform == 'darwin':
+            _icon_path = os.path.join(_base, 'msview.icns')
+        elif _sys.platform == 'win32':
+            _icon_path = os.path.join(_base, 'msview.ico')
         else:
-            _icon_path = os.path.join(_base, "icon.png")
+            _icon_path = os.path.join(_base, 'icon.png')
         if os.path.exists(_icon_path):
             from PyQt6.QtGui import QIcon
             self.setWindowIcon(QIcon(_icon_path))
@@ -529,28 +517,18 @@ class MSView(QMainWindow):
         self._apply_stylesheet()
 
     # ── Convenience accessors ─────────────────────────────────────────────────
-    def _primary_idx(self):
-        """Return the index of the currently selected spectrum, falling back to 0."""
-        if not self.spectra:
-            return 0
-        idx = self.spec_list.currentRow()
-        return idx if 0 <= idx < len(self.spectra) else 0
-
     def _primary_mz(self):
-        return self.spectra[self._primary_idx()]["mz"] if self.spectra else np.array([])
+        return self.spectra[0]["mz"] if self.spectra else np.array([])
 
     def _primary_int(self):
-        return self.spectra[self._primary_idx()]["intensity"] if self.spectra else np.array([])
+        return self.spectra[0]["intensity"] if self.spectra else np.array([])
 
     def _primary_disp(self):
-        """Display intensity of selected spectrum (normalised + scaled/offset)."""
+        """Display intensity of primary spectrum (normalised if checkbox ticked)."""
         raw = self._primary_int()
         if self.chk_normalise.isChecked() and len(raw):
             mx = raw.max()
-            raw = raw / mx * 100.0 if mx > 0 else raw
-        spec = self.spectra[self._primary_idx()] if self.spectra else None
-        if spec is not None:
-            raw = raw * spec.get("y_scale", 1.0) + spec.get("y_offset", 0.0)
+            return raw / mx * 100.0 if mx > 0 else raw
         return raw
 
     # ── UI construction ───────────────────────────────────────────────────────
@@ -709,44 +687,6 @@ class MSView(QMainWindow):
         colour_row.addWidget(self._swatch)
         colour_row.addStretch()
         lay.addLayout(colour_row)
-
-        # Per-spectrum scale and offset controls
-        self._scale_offset_group = QWidget()
-        so_lay = QVBoxLayout(self._scale_offset_group)
-        so_lay.setContentsMargins(0, 2, 0, 2)
-        so_lay.setSpacing(3)
-
-        scale_row = QHBoxLayout()
-        scale_row.addWidget(make_label("Scale:"))
-        self.slider_spec_scale = QSlider(Qt.Orientation.Horizontal)
-        self.slider_spec_scale.setRange(10, 300)
-        self.slider_spec_scale.setValue(100)
-        self.slider_spec_scale.setTickInterval(50)
-        self.lbl_spec_scale = QLabel("100%")
-        self.lbl_spec_scale.setFixedWidth(38)
-        self.slider_spec_scale.valueChanged.connect(self._on_spec_scale_changed)
-        scale_row.addWidget(self.slider_spec_scale)
-        scale_row.addWidget(self.lbl_spec_scale)
-        so_lay.addLayout(scale_row)
-
-        offset_row = QHBoxLayout()
-        offset_row.addWidget(make_label("Offset:"))
-        self.spin_spec_offset = QDoubleSpinBox()
-        self.spin_spec_offset.setRange(-1e9, 1e9)
-        self.spin_spec_offset.setValue(0.0)
-        self.spin_spec_offset.setSingleStep(100)
-        self.spin_spec_offset.setDecimals(0)
-        self.spin_spec_offset.setSuffix("  cts")
-        self.spin_spec_offset.valueChanged.connect(self._on_spec_offset_changed)
-        offset_row.addWidget(self.spin_spec_offset)
-        btn_reset_so = QPushButton("Reset")
-        btn_reset_so.setObjectName("smallBtn")
-        btn_reset_so.clicked.connect(self._reset_spec_scale_offset)
-        offset_row.addWidget(btn_reset_so)
-        so_lay.addLayout(offset_row)
-
-        lay.addWidget(self._scale_offset_group)
-        self._scale_offset_group.setVisible(False)
 
         btn_rem = QPushButton("Remove selected")
         btn_rem.setObjectName("dangerBtn")
@@ -986,7 +926,8 @@ class MSView(QMainWindow):
 
         for label, slot in [("⟲  Reset view",       self.reset_view),
                              ("⎘  Copy to clipboard", self.copy_to_clipboard),
-                             ("↓  Save PNG…",         lambda: self.export_image())]:
+                             ("↓  Save PNG…",         lambda: self.export_image()),
+                             ("⇟  Export data…",      lambda: self.export_data())]:
             b = QPushButton(label); b.setObjectName("toolBtn")
             b.clicked.connect(slot); tbl.addWidget(b)
             if label == "⟲  Reset view":
@@ -1048,6 +989,7 @@ class MSView(QMainWindow):
             (None, None, None),
             ("Copy to clipboard", "Ctrl+Shift+C", self.copy_to_clipboard),
             ("Save PNG…",         "Ctrl+Shift+P", self.export_image),
+            ("Export data…",     "Ctrl+Shift+E", self.export_data),
             (None, None, None),
             ("Quit",              "Ctrl+Q",       self.close),
         ]:
@@ -1162,8 +1104,6 @@ class MSView(QMainWindow):
                 "intensity": intensity,
                 "color":     color,
                 "visible":   True,
-                "y_scale":   1.0,
-                "y_offset":  0.0,
                 "plot_item": None,
             }
             self.spectra.append(spec)
@@ -1201,61 +1141,11 @@ class MSView(QMainWindow):
                 f"background:{c}; border:1px solid #94a3b8; border-radius:3px;")
 
     def _on_spec_selected(self, idx):
-        """Update colour swatch and scale/offset controls for the selected spectrum."""
+        """Update the colour swatch to show the selected spectrum's colour."""
         if 0 <= idx < len(self.spectra):
             c = self.spectra[idx]["color"]
             self._swatch.setStyleSheet(
                 f"background:{c}; border:1px solid #94a3b8; border-radius:3px;")
-            # Sync scale/offset controls to this spectrum
-            spec = self.spectra[idx]
-            self.slider_spec_scale.blockSignals(True)
-            self.spin_spec_offset.blockSignals(True)
-            self.slider_spec_scale.setValue(int(round(spec.get("y_scale", 1.0) * 100)))
-            self.lbl_spec_scale.setText(f"{int(round(spec.get('y_scale', 1.0) * 100))}%")
-            self.spin_spec_offset.setValue(spec.get("y_offset", 0.0))
-            self.slider_spec_scale.blockSignals(False)
-            self.spin_spec_offset.blockSignals(False)
-            self._scale_offset_group.setVisible(True)
-        else:
-            self._scale_offset_group.setVisible(False)
-
-        self.iso_peaks = None; self.iso_params = None
-        if self._overlay_item is not None:
-            self.plot_widget.removeItem(self._overlay_item)
-            self._overlay_item = None
-        self.scale_group.setVisible(False)
-        self.iso_result_group.setVisible(False)
-        self.btn_clear_overlay.setVisible(False)
-
-    def _on_spec_scale_changed(self, value):
-        idx = self.spec_list.currentRow()
-        if not (0 <= idx < len(self.spectra)): return
-        self.spectra[idx]["y_scale"] = value / 100.0
-        self.lbl_spec_scale.setText(f"{value}%")
-        self._add_spectrum_to_plot(self.spectra[idx])
-        self._redraw_annotations()
-
-    def _on_spec_offset_changed(self, value):
-        idx = self.spec_list.currentRow()
-        if not (0 <= idx < len(self.spectra)): return
-        self.spectra[idx]["y_offset"] = value
-        self._add_spectrum_to_plot(self.spectra[idx])
-        self._redraw_annotations()
-
-    def _reset_spec_scale_offset(self):
-        idx = self.spec_list.currentRow()
-        if not (0 <= idx < len(self.spectra)): return
-        self.spectra[idx]["y_scale"] = 1.0
-        self.spectra[idx]["y_offset"] = 0.0
-        self.slider_spec_scale.blockSignals(True)
-        self.spin_spec_offset.blockSignals(True)
-        self.slider_spec_scale.setValue(100)
-        self.lbl_spec_scale.setText("100%")
-        self.spin_spec_offset.setValue(0.0)
-        self.slider_spec_scale.blockSignals(False)
-        self.spin_spec_offset.blockSignals(False)
-        self._add_spectrum_to_plot(self.spectra[idx])
-        self._redraw_annotations()
 
     def _change_spectrum_colour(self):
         """Open a colour dialog and update the selected spectrum."""
@@ -1308,8 +1198,6 @@ class MSView(QMainWindow):
         if self.chk_normalise.isChecked():
             mx = intensity.max()
             intensity = intensity / mx * 100.0 if mx > 0 else intensity
-        # Apply per-spectrum scale and offset
-        intensity = intensity * spec.get("y_scale", 1.0) + spec.get("y_offset", 0.0)
 
         color = spec["color"]
         if self.combo_style.currentText().startswith("Stick"):
@@ -1370,7 +1258,7 @@ class MSView(QMainWindow):
         """Called from _on_plot_click when ruler is active."""
         if not self.spectra: return
 
-        # Snap to nearest peak by m/z, then find its local maximum
+        # Snap to local peak maximum (same logic as annotation)
         mz = self._primary_mz()
         disp = self._primary_disp()
         xr = self.plot_widget.viewRange()[0]
@@ -1378,20 +1266,8 @@ class MSView(QMainWindow):
         mask = (mz >= clicked_mz - search_r) & (mz <= clicked_mz + search_r)
         if not mask.any(): return
         local_mz = mz[mask]; local_int = disp[mask]
-        # Find nearest point by m/z distance, not tallest
-        nearest_idx = int(np.argmin(np.abs(local_mz - clicked_mz)))
-        nearest_mz = float(local_mz[nearest_idx])
-        # Refine to local maximum within a tight window around the nearest point
-        fine_r = (xr[1] - xr[0]) * 0.008
-        fine_mask = (mz >= nearest_mz - fine_r) & (mz <= nearest_mz + fine_r)
-        if fine_mask.any():
-            fine_mz = mz[fine_mask]; fine_int = disp[fine_mask]
-            best = int(np.argmax(fine_int))
-            snapped_mz = float(fine_mz[best])
-            snapped_int = float(fine_int[best])
-        else:
-            snapped_mz = nearest_mz
-            snapped_int = float(local_int[nearest_idx])
+        snapped_mz = float(local_mz[int(np.argmax(local_int))])
+        snapped_int = float(local_int[int(np.argmax(local_int))])
 
         # Draw a vertical marker
         vline = pg.InfiniteLine(pos=snapped_mz, angle=90, movable=False,
@@ -1547,16 +1423,7 @@ class MSView(QMainWindow):
         if not mask.any(): return
 
         local_mz  = mz[mask]; local_int = disp[mask]
-        # Find nearest point by m/z distance, then refine to local maximum
-        nearest_idx = int(np.argmin(np.abs(local_mz - clicked_mz)))
-        nearest_mz = float(local_mz[nearest_idx])
-        fine_r = (xr[1] - xr[0]) * 0.008
-        fine_mask = (mz >= nearest_mz - fine_r) & (mz <= nearest_mz + fine_r)
-        if fine_mask.any():
-            fine_mz = mz[fine_mask]; fine_int = disp[fine_mask]
-            snapped = float(fine_mz[int(np.argmax(fine_int))])
-        else:
-            snapped = nearest_mz
+        snapped   = float(local_mz[int(np.argmax(local_int))])
         if any(abs(a["mz"] - snapped) < 0.0001 for a in self.annotations): return
         self._add_annotation(snapped, f"{snapped:.4f}")
 
@@ -1721,11 +1588,9 @@ class MSView(QMainWindow):
             idx  = int(np.argmin(np.abs(pmz - mz)))
             suffix = "%" if self.chk_normalise.isChecked() else ""
             ruler_hint = "  [RULER ACTIVE — click a peak]" if self._ruler_active else ""
-            spec_name = self.spectra[self._primary_idx()].get("name", "")
-            spec_hint = f"  [{spec_name}]" if len(self.spectra) > 1 and spec_name else ""
             self.statusbar.showMessage(
                 f"m/z: {mz:.4f}    Nearest: {pmz[idx]:.4f}  "
-                f"Int: {disp[idx]:.0f}{suffix}{spec_hint}{ruler_hint}"
+                f"Int: {disp[idx]:.0f}{suffix}{ruler_hint}"
             )
 
     # ── Zoom buttons ──────────────────────────────────────────────────────────
@@ -1742,7 +1607,6 @@ class MSView(QMainWindow):
 
     # ── View controls ─────────────────────────────────────────────────────────
     def reset_view(self):
-        self._vb.reset_y_auto()
         self.plot_widget.autoRange()
 
     def clear_all(self):
@@ -1771,7 +1635,7 @@ class MSView(QMainWindow):
 
     # ── Export ────────────────────────────────────────────────────────────────
     def _render_png_to_file(self, path):
-        exp = pyqtgraph.exporters.ImageExporter(self.plot_widget.plotItem)
+        exp = pg.exporters.ImageExporter(self.plot_widget.plotItem)
         exp.parameters()["width"]  = 1600
         exp.parameters()["height"] = 800
         exp.export(path)
@@ -1800,6 +1664,63 @@ class MSView(QMainWindow):
             self.statusbar.showMessage(f"Saved: {path}", 4000)
         except Exception as e:
             QMessageBox.critical(self, "Save failed", str(e))
+
+    def export_data(self):
+        """Export peak data for all visible spectra as CSV or tab-delimited TXT."""
+        if not self.spectra:
+            QMessageBox.warning(self, "No data", "Load a spectrum first."); return
+
+        path, fmt = QFileDialog.getSaveFileName(
+            self, "Export Spectrum Data", "spectrum_data",
+            "CSV — comma separated (*.csv);;"
+            "Text — tab separated (*.txt);;"
+            "Origin ASCII (*.dat)"
+        )
+        if not path: return
+
+        try:
+            import csv as _csv
+
+            # Determine delimiter from chosen format
+            ext = os.path.splitext(path)[1].lower()
+            delim = "	" if ext in (".txt", ".dat") else ","
+
+            visible = [s for s in self.spectra if s["visible"]]
+            if not visible:
+                QMessageBox.warning(self, "No data", "No visible spectra to export."); return
+
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                writer = _csv.writer(f, delimiter=delim)
+
+                if len(visible) == 1:
+                    # Single spectrum — two columns: m/z, Intensity
+                    s = visible[0]
+                    writer.writerow(["m/z", "Intensity"])
+                    disp = self._spec_disp(s)
+                    for mz, inten in zip(s["mz"], disp):
+                        writer.writerow([f"{mz:.6f}", f"{inten:.4f}"])
+                else:
+                    # Multiple spectra — interleaved columns per spectrum
+                    # Header row: m/z_name, Int_name, m/z_name2, Int_name2 ...
+                    header = []
+                    for s in visible:
+                        header += [f"m/z_{s['name']}", f"Int_{s['name']}"]
+                    writer.writerow(header)
+                    # Pad to max length
+                    max_len = max(len(s["mz"]) for s in visible)
+                    disps = [self._spec_disp(s) for s in visible]
+                    for i in range(max_len):
+                        row = []
+                        for s, d in zip(visible, disps):
+                            if i < len(s["mz"]):
+                                row += [f"{s['mz'][i]:.6f}", f"{d[i]:.4f}"]
+                            else:
+                                row += ["", ""]
+                        writer.writerow(row)
+
+            self.statusbar.showMessage(f"Exported: {path}", 4000)
+        except Exception as e:
+            QMessageBox.critical(self, "Export failed", str(e))
 
     def _update_status(self):
         if not self.spectra:
