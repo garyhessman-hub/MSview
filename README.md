@@ -42,7 +42,7 @@ Download from **https://www.python.org/downloads/**
 ## Loading a spectrum
 
 - Click **Open file…** or drag a file directly onto the app window
-- Supported formats: `.xy`, `.ascii`, `.txt` — any two-column text file with m/z in the first column and intensity in the second
+- Supported formats: `.mzML`, `.mzXML`, `.xml` (Bruker DataAnalysis), `.ascii` (Bruker DataAnalysis), `.mgf`, `.xy`, `.txt` — and any two-column text file with m/z in the first column and intensity in the second
 
 ---
 
