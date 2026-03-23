@@ -4,38 +4,20 @@ A desktop application for viewing and annotating mass spectra.
 
 ---
 
-## What you need first
+## Installation
 
-### Python 3.10 or newer
-Download from **https://www.python.org/downloads/**
+### macOS
+1. Download **MSview.dmg** from the latest build under the [Actions tab](../../actions)
+2. Open the .dmg file
+3. Drag **MSview** into your Applications folder
+4. Double-click MSview to launch it
 
-- **Windows:** Run the installer. On the first screen, **tick the box that says "Add Python to PATH"** before clicking Install.
-- **Mac:** Download and run the .pkg installer. If you already have Homebrew, you can also run `brew install python` in Terminal.
-
----
-
-## Running the app
+> First launch: if macOS says the app is from an unidentified developer, right-click the app → Open → Open anyway. This only happens once.
 
 ### Windows
-1. Double-click **`run_windows.bat`**
-2. The first time only, it will install the required packages (takes ~1 minute)
-3. The app will open automatically
-
-### Mac
-1. Open **Terminal** (press Cmd+Space, type "Terminal", press Enter)
-2. Type the following and press Enter:
-   ```
-   cd ~/Downloads/msview
-   ```
-   (If you saved the folder somewhere else, replace `Downloads` with `Desktop` or wherever it is)
-3. Then type the following and press Enter:
-   ```
-   chmod +x run_mac.sh && ./run_mac.sh
-   ```
-4. The first time only, it will install required packages (~1 minute)
-5. The app will open automatically
-
-**Next time:** just repeat steps 1–3. The install step is skipped after the first run.
+1. Download **MSview_Setup.exe** from the latest build under the [Actions tab](../../actions)
+2. Run the installer and follow the prompts
+3. Launch MSview from the Start menu or desktop shortcut
 
 ---
 
@@ -60,31 +42,29 @@ Download from **https://www.python.org/downloads/**
 | Auto-label top peaks | Click **Top 5** or **Top 10** |
 | Remove annotation | Double-click it in the list |
 | Export image | Click **Export PNG** or **Export SVG** |
+| Export data | Click **Export data…** → choose CSV, TXT, or .dat |
 
 ---
 
-## Files in this folder
+## Files in this repository
 
 | File | Purpose |
 |---|---|
 | `msview.py` | Main application |
 | `isotopes.py` | Isotope distribution calculator |
-| `run_windows.bat` | Windows launcher |
-| `run_mac.sh` | Mac launcher |
-| `README.md` | This file |
+| `MSview_QuickStart.pdf` | Quick start guide for testers |
+| `icon.png` / `msview.icns` / `msview.ico` | App icons |
+| `.github/workflows/` | GitHub Actions build pipeline |
 
 ---
 
 ## Troubleshooting
 
-**"Python not found" on Windows**
-Reinstall Python from python.org and make sure to tick "Add Python to PATH".
+**Mac: "MSview cannot be opened because it is from an unidentified developer"**
+Right-click the app → Open → Open anyway. This only happens once.
 
 **App opens but looks odd on a high-resolution screen**
 This is a known Qt scaling issue on some Windows machines. It will be addressed in a future version.
 
-**Mac: "run_mac.sh cannot be opened because it is from an unidentified developer"**
-Right-click the file → Open → Open anyway. This only happens once.
-
 **Any other issue**
-Note down what happened and report it for the next iteration.
+Please report bugs or suggestions by email to [gary.hessman@tcd.ie](mailto:gary.hessman@tcd.ie) with subject line `[MSview Bug]` or `[MSview Suggestion]`.
