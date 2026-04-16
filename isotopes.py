@@ -56,9 +56,6 @@ ELEMENTS = {
     "Ca": {"mono": 39.9625912,     "avg": 40.078,    "iso_m": [39.9625912, 41.9586183, 42.9587668, 43.9554811, 45.9536928, 47.9525335], "iso_p": [0.96941, 0.00647, 0.00135, 0.02086, 0.00004, 0.00187]},
 }
 
-PROTON = 1.00727646677
-
-
 def parse_formula(formula: str) -> dict:
     """Parse a molecular formula string into {element: count} dict.
     Raises ValueError on invalid input."""
@@ -145,8 +142,9 @@ def isotope_distribution(atoms: dict, charge: int = 1) -> list:
     dist = [(m, p / max_p) for m, p in dist if p / max_p > 0.001]
 
     # Apply charge — convert to m/z
+    # User supplies the ion formula directly, so no proton addition is needed
     return sorted(
-        [((mass + charge * PROTON) / charge, rel) for mass, rel in dist],
+        [(mass / charge, rel) for mass, rel in dist],
         key=lambda x: x[0]
     )
 

@@ -209,7 +209,7 @@ def _parse_bruker_xml(path):
                     except (KeyError, ValueError):
                         pass
             if mz_list:
-                return np.array(mz_list, np.float64), np.array(int_list, np.float64)
+                return np.array(mz_list, np.float64), np.array(int_list, np.float64), "centroid"
 
     raise ValueError("No peak data found in Bruker XML file.")
 
@@ -241,64 +241,81 @@ def _parse_mgf(path):
     raise ValueError("No spectrum data found in MGF file.")
 
 
-def _parse_bruker_ascii(path):
-    """
-    Parse Bruker DataAnalysis ASCII export (.ascii).
-
-    Format — one scan per line:
-        rt,polarity,ionisation,ms_level,unknown,mode,mz_range,n_points,mz1 int1,mz2 int2,...
-
-    Returns (mz_array, intensity_array) for the first scan found.
-    """
-    with open(path, "r", encoding="utf-8", errors="replace") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            fields = line.split(",")
-            if len(fields) < 9:
-                raise ValueError(
-                    f"Expected ≥9 comma-separated fields, got {len(fields)}. "
-                    "Is this a Bruker ASCII export?"
-                )
-            # fields[0..7] are header metadata; fields[8+] are 'mz intensity' pairs
-            data_fields = fields[8:]
-            mz_list, int_list = [], []
-            for dp in data_fields:
-                parts = dp.split()
-                if len(parts) == 2:
-                    try:
-                        mz_list.append(float(parts[0]))
-                        int_list.append(float(parts[1]))
-                    except ValueError:
-                        pass
-            if mz_list:
-                return np.array(mz_list, np.float64), np.array(int_list, np.float64)
-    raise ValueError("No spectrum data found in Bruker ASCII file.")
-
-
 def load_spectrum(path):
-    """Dispatch to the right parser based on extension."""
+    """
+    Dispatch to the right parser based on extension.
+    Returns (mz, intensity, mode) where mode is "centroid" or "profile".
+    """
     ext = os.path.splitext(path)[1].lower()
+
     if ext in (".mzml", ".xml"):
-        # Try each known XML format in turn; last error is reported if all fail
         errors = []
         for parser, label in [(_parse_mzml,       "mzML"),
                                (_parse_mzxml,      "mzXML"),
                                (_parse_bruker_xml, "Bruker XML")]:
             try:
-                return parser(path)
+                result = parser(path)
+                # parsers may return 2 or 3 values
+                if len(result) == 3:
+                    return result
+                mz, intensity = result
+                # mzML/mzXML — check metadata for centroid flag
+                mode = _detect_mode_xml(path)
+                return mz, intensity, mode
             except Exception as exc:
                 errors.append(f"{label}: {exc}")
         raise ValueError("Could not parse XML file.\n" + "\n".join(errors))
+
     elif ext == ".mzxml":
-        return _parse_mzxml(path)
+        mz, intensity = _parse_mzxml(path)
+        return mz, intensity, _detect_mode_xml(path)
+
     elif ext == ".mgf":
-        return _parse_mgf(path)
-    elif ext == ".ascii":
-        return _parse_bruker_ascii(path)
+        mz, intensity = _parse_mgf(path)
+        return mz, intensity, "centroid"   # MGF is always centroid
+
     else:
-        return _parse_text(path)
+        mz, intensity = _parse_text(path)
+        return mz, intensity, _detect_mode_text(mz)
+
+
+def _detect_mode_xml(path):
+    """
+    Sniff the XML file for centroid/profile keywords in cvParams or attributes.
+    Falls back to "profile" if ambiguous.
+    """
+    try:
+        # Read first 8 KB — the spectrum metadata is always near the top
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            head = f.read(8192).lower()
+        if "centroid" in head:
+            return "centroid"
+        if "profile" in head:
+            return "profile"
+        # Bruker XML uses scanmode attribute: fullscan = profile-like, but
+        # <pk> elements mean it is already centroided
+        if "<pk " in head or "<pk	" in head:
+            return "centroid"
+    except Exception:
+        pass
+    return "profile"
+
+
+def _detect_mode_text(mz):
+    """
+    Heuristic for plain-text files: if peaks are evenly spaced it is profile,
+    if spacings are irregular (centroid peak list) it is centroid.
+    Uses coefficient of variation of m/z differences.
+    """
+    if len(mz) < 10:
+        return "centroid"
+    diffs = np.diff(mz)
+    diffs = diffs[diffs > 0]
+    if len(diffs) == 0:
+        return "centroid"
+    cv = diffs.std() / diffs.mean()
+    # Profile data has very consistent spacing (cv < 0.1)
+    return "profile" if cv < 0.1 else "centroid"
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -444,6 +461,19 @@ class MSView(QMainWindow):
         self.setMinimumSize(1050, 640)
         self.resize(1320, 740)
 
+        # App icon — use platform-appropriate format
+        import sys as _sys
+        _base = os.path.dirname(__file__)
+        if _sys.platform == 'darwin':
+            _icon_path = os.path.join(_base, 'msview.icns')
+        elif _sys.platform == 'win32':
+            _icon_path = os.path.join(_base, 'msview.ico')
+        else:
+            _icon_path = os.path.join(_base, 'icon.png')
+        if os.path.exists(_icon_path):
+            from PyQt6.QtGui import QIcon
+            self.setWindowIcon(QIcon(_icon_path))
+
         # ── Multi-spectrum state ──────────────────────────────────────────────
         # Each entry: {name, mz, intensity, color, visible, plot_item}
         self.spectra = []
@@ -519,6 +549,11 @@ class MSView(QMainWindow):
         self.statusbar = QStatusBar()
         self.setStatusBar(self.statusbar)
         self.statusbar.showMessage("No spectrum loaded")
+
+        # Permanent credit label — right-aligned, always visible
+        credit = QLabel("Built by Dr Gary Hessman with Claude")
+        credit.setStyleSheet("color:#94a3b8; font-size:10px; padding-right:8px;")
+        self.statusbar.addPermanentWidget(credit)
 
     def _build_sidebar(self):
         """
@@ -714,7 +749,7 @@ class MSView(QMainWindow):
 
         lay.addWidget(make_label("Molecular formula:"))
         self.edit_formula = QLineEdit()
-        self.edit_formula.setPlaceholderText("e.g. C12H22O11")
+        self.edit_formula.setPlaceholderText("e.g. C26H25Cl2 (enter ion formula)")
         self.edit_formula.setFont(QFont("Courier", 11))
         lay.addWidget(self.edit_formula)
 
@@ -891,7 +926,8 @@ class MSView(QMainWindow):
 
         for label, slot in [("⟲  Reset view",       self.reset_view),
                              ("⎘  Copy to clipboard", self.copy_to_clipboard),
-                             ("↓  Save PNG…",         lambda: self.export_image())]:
+                             ("↓  Save PNG…",         lambda: self.export_image()),
+                             ("⇟  Export data…",      lambda: self.export_data())]:
             b = QPushButton(label); b.setObjectName("toolBtn")
             b.clicked.connect(slot); tbl.addWidget(b)
             if label == "⟲  Reset view":
@@ -953,6 +989,7 @@ class MSView(QMainWindow):
             (None, None, None),
             ("Copy to clipboard", "Ctrl+Shift+C", self.copy_to_clipboard),
             ("Save PNG…",         "Ctrl+Shift+P", self.export_image),
+            ("Export data…",     "Ctrl+Shift+E", self.export_data),
             (None, None, None),
             ("Quit",              "Ctrl+Q",       self.close),
         ]:
@@ -1048,10 +1085,17 @@ class MSView(QMainWindow):
 
     def _load_file(self, path):
         try:
-            mz, intensity = load_spectrum(path)
+            mz, intensity, mode = load_spectrum(path)
             if not len(mz):
                 QMessageBox.warning(self, "Empty file", "No spectrum data found in this file.")
                 return
+            # Auto-switch plot style on first spectrum only
+            if len(self.spectra) == 0:
+                target = "Stick (centroid)" if mode == "centroid" else "Line (profile)"
+                if self.combo_style.currentText() != target:
+                    self.combo_style.blockSignals(True)
+                    self.combo_style.setCurrentText(target)
+                    self.combo_style.blockSignals(False)
             # Assign next colour from palette
             color = SPECTRUM_PALETTE[len(self.spectra) % len(SPECTRUM_PALETTE)]
             spec = {
@@ -1620,6 +1664,63 @@ class MSView(QMainWindow):
             self.statusbar.showMessage(f"Saved: {path}", 4000)
         except Exception as e:
             QMessageBox.critical(self, "Save failed", str(e))
+
+    def export_data(self):
+        """Export peak data for all visible spectra as CSV or tab-delimited TXT."""
+        if not self.spectra:
+            QMessageBox.warning(self, "No data", "Load a spectrum first."); return
+
+        path, fmt = QFileDialog.getSaveFileName(
+            self, "Export Spectrum Data", "spectrum_data",
+            "CSV — comma separated (*.csv);;"
+            "Text — tab separated (*.txt);;"
+            "Origin ASCII (*.dat)"
+        )
+        if not path: return
+
+        try:
+            import csv as _csv
+
+            # Determine delimiter from chosen format
+            ext = os.path.splitext(path)[1].lower()
+            delim = "	" if ext in (".txt", ".dat") else ","
+
+            visible = [s for s in self.spectra if s["visible"]]
+            if not visible:
+                QMessageBox.warning(self, "No data", "No visible spectra to export."); return
+
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                writer = _csv.writer(f, delimiter=delim)
+
+                if len(visible) == 1:
+                    # Single spectrum — two columns: m/z, Intensity
+                    s = visible[0]
+                    writer.writerow(["m/z", "Intensity"])
+                    disp = self._spec_disp(s)
+                    for mz, inten in zip(s["mz"], disp):
+                        writer.writerow([f"{mz:.6f}", f"{inten:.4f}"])
+                else:
+                    # Multiple spectra — interleaved columns per spectrum
+                    # Header row: m/z_name, Int_name, m/z_name2, Int_name2 ...
+                    header = []
+                    for s in visible:
+                        header += [f"m/z_{s['name']}", f"Int_{s['name']}"]
+                    writer.writerow(header)
+                    # Pad to max length
+                    max_len = max(len(s["mz"]) for s in visible)
+                    disps = [self._spec_disp(s) for s in visible]
+                    for i in range(max_len):
+                        row = []
+                        for s, d in zip(visible, disps):
+                            if i < len(s["mz"]):
+                                row += [f"{s['mz'][i]:.6f}", f"{d[i]:.4f}"]
+                            else:
+                                row += ["", ""]
+                        writer.writerow(row)
+
+            self.statusbar.showMessage(f"Exported: {path}", 4000)
+        except Exception as e:
+            QMessageBox.critical(self, "Export failed", str(e))
 
     def _update_status(self):
         if not self.spectra:
