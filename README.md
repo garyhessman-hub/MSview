@@ -43,6 +43,7 @@ A desktop application for viewing and annotating mass spectra.
 | Remove annotation | Double-click it in the list |
 | Export image | Click **Export PNG** or **Export SVG** |
 | Export data | Click **Export data…** → choose CSV, TXT, or .dat |
+| Export isotopic pattern model |
 
 ---
 
