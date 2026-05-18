@@ -27,8 +27,10 @@ jobs:
             --icon "msview.icns" \
             --add-data "isotopes.py:." \
             --add-data "msview.icns:." \
+            --hidden-import "pyqtgraph.exporters" \
+            --hidden-import "pyqtgraph.exporters.ImageExporter" \
+            --hidden-import "pyqtgraph.exporters.SVGExporter" \
             msview.py
-
       - name: Create .dmg
         run: |
           brew install create-dmg
@@ -40,7 +42,6 @@ jobs:
             --app-drop-link 425 190 \
             "MSview.dmg" \
             "dist/" || true
-
       - uses: actions/upload-artifact@v4
         with:
           name: MSview-macOS
@@ -67,8 +68,10 @@ jobs:
             --icon "msview.ico" `
             --add-data "isotopes.py;." `
             --add-data "msview.ico;." `
+            --hidden-import "pyqtgraph.exporters" `
+            --hidden-import "pyqtgraph.exporters.ImageExporter" `
+            --hidden-import "pyqtgraph.exporters.SVGExporter" `
             msview.py
-
       - name: Install NSIS
         run: choco install nsis --yes
 
@@ -100,13 +103,11 @@ jobs:
             Delete "$DESKTOP\MSview.lnk"
           SectionEnd
           '@
-
       - name: Build installer
         shell: pwsh
         run: |
           $makensis = "C:\Program Files (x86)\NSIS\makensis.exe"
           & $makensis installer.nsi
-
       - uses: actions/upload-artifact@v4
         with:
           name: MSview-Windows

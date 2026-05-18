@@ -26,6 +26,7 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont, QColor, QAction, QGuiApplication, QImage
 
 import pyqtgraph as pg
+import pyqtgraph.exporters  # required: pg.exporters is not auto-loaded by the base import
 
 from isotopes import parse_formula, format_formula, isotope_distribution, gaussian_profile
 
@@ -526,6 +527,16 @@ class MSView(QMainWindow):
     def _primary_disp(self):
         """Display intensity of primary spectrum (normalised if checkbox ticked)."""
         raw = self._primary_int()
+        if self.chk_normalise.isChecked() and len(raw):
+            mx = raw.max()
+            return raw / mx * 100.0 if mx > 0 else raw
+        return raw
+
+    def _spec_disp(self, s):
+        """Display intensity of any given spectrum (normalised if checkbox ticked).
+        Generalisation of _primary_disp for use when iterating over multiple spectra,
+        e.g. data export. Accepts a spectrum dict from self.spectra."""
+        raw = s["intensity"]
         if self.chk_normalise.isChecked() and len(raw):
             mx = raw.max()
             return raw / mx * 100.0 if mx > 0 else raw
@@ -1320,7 +1331,8 @@ class MSView(QMainWindow):
 
         self.iso_peaks  = isotope_distribution(atoms, z)
         self.iso_params = {"fwhm": fwhm, "color": color,
-                           "label": f"Calc. {format_formula(atoms)}  z={z}"}
+                           "label": f"Calc. {format_formula(atoms)}  z={z}",
+                           "formula": format_formula(atoms), "z": z}
 
         self.slider_scale.blockSignals(True)
         self.slider_scale.setValue(100)
@@ -1666,11 +1678,13 @@ class MSView(QMainWindow):
             QMessageBox.critical(self, "Save failed", str(e))
 
     def export_data(self):
-        """Export peak data for all visible spectra as CSV or tab-delimited TXT."""
+        """Export peak data for all visible spectra as CSV or tab-delimited TXT/DAT.
+        If an isotopic pattern overlay is active, the user is offered the option
+        to append the theoretical peak list as a labelled block in the same file."""
         if not self.spectra:
             QMessageBox.warning(self, "No data", "Load a spectrum first."); return
 
-        path, fmt = QFileDialog.getSaveFileName(
+        path, _ = QFileDialog.getSaveFileName(
             self, "Export Spectrum Data", "spectrum_data",
             "CSV — comma separated (*.csv);;"
             "Text — tab separated (*.txt);;"
@@ -1678,12 +1692,24 @@ class MSView(QMainWindow):
         )
         if not path: return
 
+        # If a pattern is active, ask whether to include it
+        include_pattern = False
+        if self.iso_peaks and self.iso_params:
+            reply = QMessageBox.question(
+                self, "Isotopic Pattern",
+                f"Include isotopic pattern data?\n"
+                f"({self.iso_params['formula']}  z={self.iso_params['z']})",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes
+            )
+            include_pattern = (reply == QMessageBox.StandardButton.Yes)
+
         try:
             import csv as _csv
 
             # Determine delimiter from chosen format
             ext = os.path.splitext(path)[1].lower()
-            delim = "	" if ext in (".txt", ".dat") else ","
+            delim = "\t" if ext in (".txt", ".dat") else ","
 
             visible = [s for s in self.spectra if s["visible"]]
             if not visible:
@@ -1700,13 +1726,11 @@ class MSView(QMainWindow):
                     for mz, inten in zip(s["mz"], disp):
                         writer.writerow([f"{mz:.6f}", f"{inten:.4f}"])
                 else:
-                    # Multiple spectra — interleaved columns per spectrum
-                    # Header row: m/z_name, Int_name, m/z_name2, Int_name2 ...
+                    # Multiple spectra — interleaved column pairs per spectrum
                     header = []
                     for s in visible:
                         header += [f"m/z_{s['name']}", f"Int_{s['name']}"]
                     writer.writerow(header)
-                    # Pad to max length
                     max_len = max(len(s["mz"]) for s in visible)
                     disps = [self._spec_disp(s) for s in visible]
                     for i in range(max_len):
@@ -1717,6 +1741,15 @@ class MSView(QMainWindow):
                             else:
                                 row += ["", ""]
                         writer.writerow(row)
+
+                # ── Optional isotopic pattern block ───────────────────────────────────────────────
+                if include_pattern:
+                    writer.writerow([])   # blank separator line
+                    writer.writerow([f"# Isotopic pattern: {self.iso_params['formula']}  "
+                                     f"z={self.iso_params['z']}"])
+                    writer.writerow(["m/z", "Relative Intensity (%)"])
+                    for mz, rel in self.iso_peaks:
+                        writer.writerow([f"{mz:.5f}", f"{rel * 100:.4f}"])
 
             self.statusbar.showMessage(f"Exported: {path}", 4000)
         except Exception as e:
