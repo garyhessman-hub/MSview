@@ -60,6 +60,8 @@ Download from **https://www.python.org/downloads/**
 | Auto-label top peaks | Click **Top 5** or **Top 10** |
 | Remove annotation | Double-click it in the list |
 | Export image | Click **Export PNG** or **Export SVG** |
+| Export spectrum data | Click **Export data…** in the toolbar or press **Ctrl+Shift+E** — saves as CSV, TXT, or Origin DAT |
+| Export isotopic pattern | With a pattern overlaid, click **Export data…** and choose **Yes** when prompted — the theoretical m/z and relative intensity values are appended to the same file |
 
 ---
 
