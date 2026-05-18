@@ -1695,14 +1695,20 @@ class MSView(QMainWindow):
         # If a pattern is active, ask whether to include it
         include_pattern = False
         if self.iso_peaks and self.iso_params:
-            reply = QMessageBox.question(
-                self, "Isotopic Pattern",
+            # Build dialog manually so we can use object-identity comparison on the
+            # clicked button — avoids any fragile StandardButton enum comparisons.
+            msg = QMessageBox(self)
+            msg.setWindowTitle("Isotopic Pattern")
+            msg.setText(
                 f"Include isotopic pattern data?\n"
-                f"({self.iso_params['formula']}  z={self.iso_params['z']})",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.Yes
+                f"({self.iso_params['formula']}  z={self.iso_params['z']})"
             )
-            include_pattern = (reply == QMessageBox.StandardButton.Yes)
+            msg.setIcon(QMessageBox.Icon.Question)
+            yes_btn = msg.addButton("Include pattern", QMessageBox.ButtonRole.YesRole)
+            no_btn  = msg.addButton("Spectra only",    QMessageBox.ButtonRole.NoRole)
+            msg.setDefaultButton(yes_btn)
+            msg.exec()
+            include_pattern = (msg.clickedButton() is yes_btn)
 
         try:
             import csv as _csv
@@ -1715,43 +1721,50 @@ class MSView(QMainWindow):
             if not visible:
                 QMessageBox.warning(self, "No data", "No visible spectra to export."); return
 
+            # Pre-compute display intensities for each visible spectrum
+            disps = [self._spec_disp(s) for s in visible]
+
+            # Total row count must span the longest spectrum and (if requested)
+            # the isotopic pattern, so shorter columns are padded with blanks.
+            spec_max = max(len(s["mz"]) for s in visible)
+            max_len  = max(spec_max, len(self.iso_peaks)) if include_pattern else spec_max
+
             with open(path, "w", newline="", encoding="utf-8") as f:
                 writer = _csv.writer(f, delimiter=delim)
 
+                # ── Header row ────────────────────────────────────────────────
+                header = []
                 if len(visible) == 1:
-                    # Single spectrum — two columns: m/z, Intensity
-                    s = visible[0]
-                    writer.writerow(["m/z", "Intensity"])
-                    disp = self._spec_disp(s)
-                    for mz, inten in zip(s["mz"], disp):
-                        writer.writerow([f"{mz:.6f}", f"{inten:.4f}"])
+                    header += ["m/z", "Intensity"]
                 else:
-                    # Multiple spectra — interleaved column pairs per spectrum
-                    header = []
                     for s in visible:
                         header += [f"m/z_{s['name']}", f"Int_{s['name']}"]
-                    writer.writerow(header)
-                    max_len = max(len(s["mz"]) for s in visible)
-                    disps = [self._spec_disp(s) for s in visible]
-                    for i in range(max_len):
-                        row = []
-                        for s, d in zip(visible, disps):
-                            if i < len(s["mz"]):
-                                row += [f"{s['mz'][i]:.6f}", f"{d[i]:.4f}"]
-                            else:
-                                row += ["", ""]
-                        writer.writerow(row)
-
-                # ── Optional isotopic pattern block ───────────────────────────────────────────────
                 if include_pattern:
-                    writer.writerow([])   # blank separator line
-                    writer.writerow([f"# Isotopic pattern: {self.iso_params['formula']}  "
-                                     f"z={self.iso_params['z']}"])
-                    writer.writerow(["m/z", "Relative Intensity (%)"])
-                    for mz, rel in self.iso_peaks:
-                        writer.writerow([f"{mz:.5f}", f"{rel * 100:.4f}"])
+                    header += ["m/z_pattern", "Rel.Int._pattern"]
+                writer.writerow(header)
 
-            self.statusbar.showMessage(f"Exported: {path}", 4000)
+                # ── Data rows ─────────────────────────────────────────────────
+                for i in range(max_len):
+                    row = []
+                    # Spectrum column(s)
+                    for s, d in zip(visible, disps):
+                        if i < len(s["mz"]):
+                            row += [f"{s['mz'][i]:.6f}", f"{d[i]:.4f}"]
+                        else:
+                            row += ["", ""]
+                    # Optional pattern columns
+                    if include_pattern:
+                        if i < len(self.iso_peaks):
+                            mz, rel = self.iso_peaks[i]
+                            row += [f"{mz:.5f}", f"{rel * 100:.4f}"]
+                        else:
+                            row += ["", ""]
+                    writer.writerow(row)
+
+            self.statusbar.showMessage(
+                f"Exported: {path}" + ("  (pattern included)" if include_pattern else ""),
+                4000
+            )
         except Exception as e:
             QMessageBox.critical(self, "Export failed", str(e))
 
